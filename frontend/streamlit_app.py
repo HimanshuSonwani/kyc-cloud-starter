@@ -9,12 +9,12 @@ from typing import Dict, Tuple
 
 import requests
 import streamlit as st
-
+final_url = kyc-cloud-starter-production.up.railway.app
 
 # ------------- Configuration -------------
 # Prefer Streamlit secrets, then env var, then text input in the UI.
-DEFAULT_API_URL = (
-    st.secrets.get("API_URL") if "API_URL" in st.secrets else os.getenv("API_URL", "").strip()
+url = (
+    st.secrets.get("API_URL") if "API_URL" in st.secrets else final_url
 )
 
 POLL_MAX_SECONDS = int(os.getenv("POLL_MAX_SECONDS", "60"))
@@ -69,13 +69,7 @@ st.set_page_config(page_title="KYC Cloud UI", page_icon="🪪", layout="centered
 st.title("🪪 KYC Cloud UI")
 
 with st.expander("API connection", expanded=not bool(DEFAULT_API_URL)):
-    api_url = st.text_input(
-        "API base URL (your FastAPI on Railway, e.g. https://kyc-cloud-starter-production.up.railway.app)",
-        value=DEFAULT_API_URL,
-        placeholder="https://<your-api>.up.railway.app",
-    )
-else:
-    api_url = DEFAULT_API_URL
+    api_url = env_url
 
 col_h, col_ping = st.columns([1, 1])
 with col_h:
