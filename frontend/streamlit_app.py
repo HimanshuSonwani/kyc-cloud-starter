@@ -7,7 +7,7 @@ from typing import Dict
 # ----------------------------
 # Config
 # ----------------------------
-API_BASE_DEFAULT = os.getenv("https://kyc-cloud-starter-production.up.railway.app", "").strip()  # e.g., https://your-api.up.railway.app
+API_BASE_DEFAULT = os.getenv("API_BASE_URL", "").strip()  # e.g., https://your-api.up.railway.app
 
 # ----------------------------
 # API helpers (modular)
