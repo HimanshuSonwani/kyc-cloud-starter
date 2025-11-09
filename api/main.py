@@ -110,7 +110,6 @@ def presign(req: PresignReq):
             Params={
                 "Bucket": S3_BUCKET,
                 "Key": key,
-                "ContentType": content_types[part],
             },
             ExpiresIn=600,
         )
