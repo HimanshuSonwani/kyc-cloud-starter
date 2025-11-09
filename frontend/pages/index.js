@@ -1,8 +1,13 @@
+// frontend/pages/index.js
+import dynamic from "next/dynamic";
+const HealthCheck = dynamic(() => import("../components/HealthCheck"), { ssr: false });
+
 export default function Home() {
   return (
-    <main style={{padding: 24, fontFamily: 'system-ui, Arial'}}>
-      <h1>Frontend OK</h1>
-      <p>If you see this on Railway, the 502 is gone.</p>
+    <main style={{maxWidth: 720, margin: "40px auto", fontFamily: "sans-serif"}}>
+      <h1>KYC Frontend — Step 1</h1>
+      <p>Verify connectivity to backend first.</p>
+      <HealthCheck />
     </main>
   );
 }
