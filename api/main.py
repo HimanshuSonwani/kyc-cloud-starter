@@ -1,25 +1,23 @@
+# main.py
 import os, uuid
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # <-- add
 from pydantic import BaseModel, Field
 import boto3
 from botocore.config import Config
 import redis
-from fastapi.middleware.cors import CORSMiddleware
 
-FRONTEND_ORIGINS = [
-    "https://kyc-cloud-starter-production-7c48.up.railway.app",  # Railway URL of the Next.js site
-    "http://localhost:3000",           # local dev (optional)
-]
+app = FastAPI(title="KYC Cloud API")
 
+# allow your frontend origin(s)
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTEND_ORIGINS,
+    allow_origins=https://kyc-cloud-starter-production-7c48.up.railway.app,  # e.g. "https://your-frontend.up.railway.app"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app = FastAPI(title="KYC Cloud API")
 
 # ENV
 S3_ENDPOINT = os.getenv("S3_ENDPOINT")  # may be None for AWS
