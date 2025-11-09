@@ -8,18 +8,18 @@ import redis
 
 app = FastAPI(title="KYC Cloud API")
 
-FRONTEND_ORIGIN = os.getenv(
-    "FRONTEND_ORIGIN",
-    "https://kyc-cloud-starter-production-7c48.up.railway.app"  # <- put YOUR frontend URL here
-)
+# --- CORS ---
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "").strip()
+allowed = [FRONTEND_ORIGIN] if FRONTEND_ORIGIN else ["*"]   # fallback for quick testing
+# You can also hard-list multiple:
+# allowed = [FRONTEND_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],   # during debugging you can use ["*"]
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_origins=allowed,
+    allow_credentials=True,
+    allow_methods=["*"],     # OPTIONS handled automatically
     allow_headers=["*"],
-    allow_credentials=False,
-    expose_headers=["*"],
 )
 
 # ENV vars from Railway
