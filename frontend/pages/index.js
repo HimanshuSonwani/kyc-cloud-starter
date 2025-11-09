@@ -1,25 +1,28 @@
-// frontend/pages/index.js
-import { useState } from 'react';
+import { useState } from "react";
+import UploadStep from "../components/UploadStep";
 
 export default function Home() {
-  const [msg, setMsg] = useState('—');
+  const [out, setOut] = useState("");
+  const API = process.env.NEXT_PUBLIC_API_BASE;
 
-  const ping = async () => {
+  async function ping() {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`);
-      const data = await res.json();
-      setMsg(JSON.stringify(data));
+      const r = await fetch(`${API}/health`);
+      setOut(await r.text());
     } catch (e) {
-      setMsg('ERR: ' + (e?.message || 'Failed to fetch'));
+      setOut("ERR: " + e.message);
     }
-  };
+  }
 
   return (
-    <main style={{ padding: 24, fontFamily: 'sans-serif' }}>
+    <main style={{padding:24}}>
       <h1>KYC Frontend — Step 1</h1>
       <p>Verify connectivity to backend first.</p>
       <button onClick={ping}>Ping /health</button>
-      <p>{msg}</p>
+      <pre>{out}</pre>
+
+      <h2 style={{marginTop:24}}>Step 2 — Upload</h2>
+      <UploadStep />
     </main>
   );
 }
