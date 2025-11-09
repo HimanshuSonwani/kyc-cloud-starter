@@ -104,18 +104,21 @@ def get_verification(job_id: str):
     data = r.hgetall(f"ver:{job_id}")
     if not data:
         raise HTTPException(status_code=404, detail="Not found")
+    fields = None
+    if "fields" in data:
+        try:
+            fields = json.loads(data["fields"])
+        except Exception:
+            fields = None
     out = {
         "id": job_id,
-        "status": data.get("status", "unknown"),
-        "score": int(data["score"]) if data.get("score", "").isdigit() else None,
+        "status": data.get("status","unknown"),
+        "score": int(data["score"]) if data.get("score","").isdigit() else None,
         "explanations": [
-            {
-                "check": "dummy_pipeline",
-                "pass": data.get("status") == "approved",
-                "detail": "Simulated check",
-            },
+            {"check": "selfie_face_present", "pass": data.get("status")=="approved" or data.get("status")=="review"},
+            {"check": "id_front_parsed", "pass": fields is not None},
         ],
-        "fields": {"name": "TBD", "dob": "TBD"},
-        "report_pdf_url": None,
+        "fields": fields,
+        "report_pdf_url": None
     }
     return out
