@@ -1,15 +1,16 @@
 # main.py
 import os, uuid
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # <-- add
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import boto3
 from botocore.config import Config
 import redis
-from fastapi.middleware.cors import CORSMiddleware
 
+app = FastAPI(title="KYC Cloud API")  # define app FIRST
+
+# CORS
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_ORIGIN],  # must be a list of strings
