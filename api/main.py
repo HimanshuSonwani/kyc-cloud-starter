@@ -20,11 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Redis ----
-REDIS_URL = os.getenv("REDIS_URL")
-if not REDIS_URL:
-    raise RuntimeError("REDIS_URL is required")
-r = redis.from_url(REDIS_URL, decode_responses=True)
+r = redis.from_url(
+    os.getenv("REDIS_URL"),
+    decode_responses=True,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+    health_check_interval=30,
+)
 
 # ---- S3 / R2 (optional but recommended) ----
 S3_ENDPOINT = os.getenv("S3_ENDPOINT") or None
