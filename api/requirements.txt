@@ -6,3 +6,4 @@ pydantic
 opencv-python-headless==4.10.0.84
 Pillow
 openai>=1.40.0
+python-multipart
