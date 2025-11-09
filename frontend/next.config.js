@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // REMOVE standalone build completely
-  output: 'server',
+  // produce the .next/standalone server.js that we run on Railway
+  output: 'standalone'
 };
 
 module.exports = nextConfig;
