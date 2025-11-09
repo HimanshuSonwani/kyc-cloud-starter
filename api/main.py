@@ -68,20 +68,21 @@ def health():
 @app.post("/v1/presign", response_model=PresignResp)
 def presign(req: PresignReq):
     uid = str(uuid.uuid4())
-    keys = {
-        "front": f"raw/{uid}-front.jpg",
-        "back": f"raw/{uid}-back.jpg",
-        "selfie": f"raw/{uid}-selfie.jpg",
-    }
-    urls = {}
-    for part, key in keys.items():
-        url = s3.generate_presigned_url(
-            ClientMethod="put_object",
-            Params={"Bucket": S3_BUCKET, "Key": key},
-            ExpiresIn=600,
-        )
-        urls[part] = url
-    return {"object_keys": keys, "upload_urls": urls}
+# in main.py (inside presign)
+keys = {
+    "front": f"raw/{uid}-front.jpg",
+    "back": f"raw/{uid}-back.jpg",
+    "selfie": f"raw/{uid}-selfie.jpg",
+}
+urls = {}
+for part, key in keys.items():
+    url = s3.generate_presigned_url(
+        ClientMethod="put_object",
+        Params={"Bucket": S3_BUCKET, "Key": key},  # removed ContentType
+        ExpiresIn=600,
+    )
+    urls[part] = url
+return {"object_keys": keys, "upload_urls": urls}
 
 @app.post("/v1/verifications")
 def create_verification(req: CreateVerReq):
