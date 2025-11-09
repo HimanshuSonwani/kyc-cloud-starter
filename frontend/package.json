@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build && next export",
+    "build": "next build",
     "start": "npx --yes serve -s out -l ${PORT:-3000}"
   },
   "dependencies": {
