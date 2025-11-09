@@ -1,7 +1,8 @@
-// frontend/next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // no "output" key here
+  // REMOVE standalone build completely
+  output: 'server',
 };
+
 module.exports = nextConfig;
