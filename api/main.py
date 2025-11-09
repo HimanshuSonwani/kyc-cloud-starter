@@ -5,6 +5,7 @@ import boto3
 from botocore.config import Config
 import redis
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, Dict
 
 app = FastAPI(title="KYC Cloud API")
 
@@ -49,13 +50,14 @@ else:
 
 # ------- Models -------
 class PresignReq(BaseModel):
-    document_type: str = Field(..., examples=["passport","driver_license","aadhaar_offline"])
+    document_type: str
     user_fields: dict = Field(default_factory=dict)
+    # NEW: ask frontend to tell us the MIME type for each part
+    content_types: Optional[Dict[str, str]] = None  # {"front":"image/png","back":"image/jpeg","selfie":"image/jpeg"}
 
 class PresignResp(BaseModel):
     object_keys: dict
     upload_urls: dict
-    content_types: dict
 
 class CreateVerReq(BaseModel):
     document_type: str
@@ -83,39 +85,43 @@ def health():
 
 @app.post("/v1/presign", response_model=PresignResp)
 def presign(req: PresignReq):
-    """
-    Frontend should call this with the selected files' MIME types (or names) so we
-    can issue correctly typed PUT URLs. If none are provided we default to jpeg.
-    Expect frontend to send e.g. user_fields={"front_type":"image/png", "back_type":"image/jpeg", "selfie_type":"image/png"}
-    or file names.
-    """
     uid = str(uuid.uuid4())
-
-    # detect each part's extension and mime
-    fext, fmime = choose_ext_and_type(req.user_fields.get("front_type", "image/jpeg"))
-    bext, bmime = choose_ext_and_type(req.user_fields.get("back_type", "image/jpeg"))
-    sext, smime = choose_ext_and_type(req.user_fields.get("selfie_type", "image/jpeg"))
-
     keys = {
-        "front":  f"raw/{uid}-front{fext}",
-        "back":   f"raw/{uid}-back{bext}",
-        "selfie": f"raw/{uid}-selfie{sext}",
+        "front": f"raw/{uid}-front",
+        "back": f"raw/{uid}-back",
+        "selfie": f"raw/{uid}-selfie",
     }
     content_types = {"front": fmime, "back": bmime, "selfie": smime}
 
     urls = {}
     for part, key in keys.items():
+        # choose extension from MIME if provided (defaults to .jpg)
+        mime = (req.content_types or {}).get(part, "image/jpeg")
+        ext = {
+            "image/jpeg": "jpg",
+            "image/jpg": "jpg",
+            "image/png": "png",
+            "image/webp": "webp",
+        }.get(mime, "jpg")
+        full_key = f"{key}.{ext}"
+
+        params = {
+            "Bucket": S3_BUCKET,
+            "Key": full_key,
+            # IMPORTANT: include the same ContentType the browser will send
+            "ContentType": mime,
+        }
         url = s3.generate_presigned_url(
             ClientMethod="put_object",
-            Params={
-                "Bucket": S3_BUCKET,
-                "Key": key,
-            },
+            Params=params,
             ExpiresIn=600,
         )
+
+        keys[part] = full_key
         urls[part] = url
 
-    return {"object_keys": keys, "upload_urls": urls, "content_types": content_types}
+    return {"object_keys": keys, "upload_urls": urls}
+
 
 @app.post("/v1/verifications")
 def create_verification(req: CreateVerReq):
