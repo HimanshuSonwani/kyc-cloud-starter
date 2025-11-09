@@ -1,8 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export',          // replaces "next export"
-  images: { unoptimized: true }, // needed if you use <Image/> with static export
-  trailingSlash: true        // optional; keeps urls consistent when served from /out
+  reactStrictMode: true,
+  output: 'export', // if you’re serving as static; otherwise remove this
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${process.env.NEXT_PUBLIC_API_BASE}/:path*`,
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;
