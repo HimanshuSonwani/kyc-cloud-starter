@@ -35,8 +35,8 @@ if S3_ENDPOINT:
         endpoint_url=S3_ENDPOINT,
         aws_access_key_id=S3_ACCESS_KEY,
         aws_secret_access_key=S3_SECRET_KEY,
-        region_name=None if S3_REGION == "auto" else S3_REGION,
-        config=Config(signature_version="s3v4"),
+        region_name=S3_REGION if S3_REGION != "auto" else None,
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 else:
     s3 = boto3.client(
