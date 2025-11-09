@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_BASE; // e.g. https://kyc-cloud-starter-production.up.railway.app
+const API = process.env.NEXT_PUBLIC_API_BASE;
 
 export default function Home() {
   const [front, setFront] = useState(null);
@@ -14,88 +14,99 @@ export default function Home() {
   const append = (m) => setLog((p) => p + m + "\n");
 
   async function ping() {
-    const r = await fetch(`${API}/health`);
-    append(await r.text());
+    try {
+      const r = await fetch(`${API}/health`);
+      const j = await r.json();
+      append(`API /health: ${JSON.stringify(j)}`);
+    } catch (e) {
+      append(`API /health error: ${e}`);
+    }
   }
 
-  async function run() {
+  async function startJob() {
+    if (!front || !back || !selfie) {
+      alert("Upload front, back, and selfie first.");
+      return;
+    }
     setBusy(true);
-    setLog(""); setResult(null);
-
-    // 1) presign
-    append("Presigning…");
-    const pres = await fetch(`${API}/v1/presign`, {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ document_type: "aadhaar_offline", user_fields: {} })
-    }).then(r=>r.json());
-
-    // 2) put uploads to R2
-    async function put(url, file) {
-      await fetch(url, { method:"PUT", headers:{ "Content-Type":"image/jpeg" }, body:file });
+    setResult(null);
+    setJob(null);
+    try {
+      const fd = new FormData();
+      fd.append("front", front);
+      fd.append("back", back);
+      fd.append("selfie", selfie);
+      const r = await fetch(`${API}/jobs/start`, { method: "POST", body: fd });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      const j = await r.json();
+      setJob(j.id);
+      append(`Started job: ${j.id}`);
+    } catch (e) {
+      append(`Start job error: ${e}`);
+    } finally {
+      setBusy(false);
     }
-    append("Uploading to R2…");
-    await Promise.all([
-      put(pres.upload_urls.front, front),
-      put(pres.upload_urls.back, back),
-      put(pres.upload_urls.selfie, selfie),
-    ]);
-
-    // 3) create verification
-    append("Creating verification job…");
-    const created = await fetch(`${API}/v1/verifications`, {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({
-        document_type: "aadhaar_offline",
-        object_keys: pres.object_keys,
-        user_fields: {}
-      })
-    }).then(r=>r.json());
-    setJob(created.id);
-
-    // 4) poll
-    append(`Job ${created.id} queued. Polling…`);
-    let tries = 0;
-    while (tries < 120) {
-      const data = await fetch(`${API}/v1/verifications/${created.id}`).then(r=>r.json());
-      if (["approved","review","error"].includes(data.status)) {
-        setResult(data);
-        append(`Done: ${JSON.stringify(data)}`);
-        setBusy(false);
-        return;
-      }
-      await new Promise(res => setTimeout(res, 2000));
-      tries++;
-    }
-    append("Timed out.");
-    setBusy(false);
   }
+
+  useEffect(() => {
+    if (!job) return;
+    let st = null;
+    async function poll() {
+      try {
+        const r = await fetch(`${API}/jobs/${job}`);
+        const j = await r.json();
+        if (j.status) {
+          append(`Status ${job}: ${j.status}${j.score != null ? ` (${j.score})` : ""}`);
+          if (["approved", "review", "rejected", "error"].includes(j.status)) {
+            setResult(j);
+            clearInterval(st);
+            st = null;
+          }
+        }
+      } catch (e) {
+        append(`Poll error: ${e}`);
+      }
+    }
+    st = setInterval(poll, 1500);
+    return () => st && clearInterval(st);
+  }, [job]);
 
   return (
-    <div style={{maxWidth:720,margin:"48px auto",fontFamily:"Inter,system-ui,Arial"}}>
-      <h1>KYC — Demo</h1>
+    <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "Inter, system-ui, Arial" }}>
+      <h1>KYC Demo</h1>
 
-      <button onClick={ping} disabled={busy}>Ping /health</button>
-
-      <h2 style={{marginTop:24}}>Step 1 — Upload</h2>
-      <div style={{display:"grid",gap:8}}>
-        <label>Front: <input type="file" accept="image/*" onChange={e=>setFront(e.target.files[0])} /></label>
-        <label>Back: <input type="file" accept="image/*" onChange={e=>setBack(e.target.files[0])} /></label>
-        <label>Selfie: <input type="file" accept="image/*" onChange={e=>setSelfie(e.target.files[0])} /></label>
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr", marginTop: 12 }}>
+        <label>
+          ID front:
+          <input type="file" accept="image/*" onChange={(e) => setFront(e.target.files?.[0] || null)} />
+        </label>
+        <label>
+          ID back:
+          <input type="file" accept="image/*" onChange={(e) => setBack(e.target.files?.[0] || null)} />
+        </label>
+        <label>
+          Selfie:
+          <input type="file" accept="image/*" onChange={(e) => setSelfie(e.target.files?.[0] || null)} />
+        </label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={ping} disabled={busy}>Ping API</button>
+          <button style={{ marginTop: 12 }} disabled={busy || !front || !back || !selfie} onClick={startJob}>
+            Start Verification
+          </button>
+        </div>
       </div>
-      <button style={{marginTop:12}} disabled={busy || !front || !back || !selfie} onClick={run}>Upload & Verify</button>
 
-      <h2 style={{marginTop:24}}>Logs</h2>
-      <pre style={{background:"#0b1022",color:"#d4e1ff",padding:16,whiteSpace:"pre-wrap"}}>{log || "…"}</pre>
+      <h2 style={{ marginTop: 24 }}>Log</h2>
+      <pre style={{ background: "#111", color: "#0f0", padding: 16, minHeight: 140, whiteSpace: "pre-wrap" }}>{log}</pre>
 
       {result && (
         <>
           <h2>Result</h2>
-          <pre style={{background:"#f7f7f7",padding:16}}>{JSON.stringify(result, null, 2)}</pre>
+          <pre style={{ background: "#f7f7f7", padding: 16 }}>{JSON.stringify(result, null, 2)}</pre>
           {result.fields && (
-            <div style={{marginTop:8}}>
-              <strong>Extracted:</strong> {result.fields.full_name || "?"} | {result.fields.dob || "?"} | {result.fields.document_number || "?"}
+            <div style={{ marginTop: 8 }}>
+              <strong>Extracted:</strong>{" "}
+              {result.fields.full_name || "?"} | {result.fields.dob || "?"} | {result.fields.document_number || "?"}
             </div>
           )}
         </>
