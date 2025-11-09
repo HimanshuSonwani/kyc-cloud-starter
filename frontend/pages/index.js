@@ -1,93 +1,105 @@
 import { useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_BASE; // no trailing slash
+const API = process.env.NEXT_PUBLIC_API_BASE; // e.g. https://kyc-cloud-starter-production.up.railway.app
 
 export default function Home() {
   const [front, setFront] = useState(null);
   const [back, setBack] = useState(null);
   const [selfie, setSelfie] = useState(null);
   const [log, setLog] = useState("");
+  const [job, setJob] = useState(null);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const append = (m) => setLog((p) => p + m + "\n");
 
   async function ping() {
-    const res = await fetch(`${API}/health`);
-    setLog(await res.text());
+    const r = await fetch(`${API}/health`);
+    append(await r.text());
   }
 
-  async function upload() {
-    if (!front || !back || !selfie) {
-      setLog("Select all 3 files first.");
-      return;
-    }
+  async function run() {
+    setBusy(true);
+    setLog(""); setResult(null);
 
-    // 1) ask backend for presigned PUT URLs with the exact MIME types
-    const body = {
-      document_type: "aadhaar_offline",
-      user_fields: {},
-      content_types: {
-        front: front.type || "image/jpeg",
-        back: back.type || "image/jpeg",
-        selfie: selfie.type || "image/jpeg",
-      },
-    };
-
+    // 1) presign
+    append("Presigning…");
     const pres = await fetch(`${API}/v1/presign`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!pres.ok) {
-      setLog(`presign failed: ${pres.status}`);
-      return;
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ document_type: "aadhaar_offline", user_fields: {} })
+    }).then(r=>r.json());
+
+    // 2) put uploads to R2
+    async function put(url, file) {
+      await fetch(url, { method:"PUT", headers:{ "Content-Type":"image/jpeg" }, body:file });
     }
-    const { upload_urls, object_keys } = await pres.json();
-
-    // 2) PUT each file to R2 using the SAME Content-Type the server signed
-    const put = (url, file) =>
-      fetch(url, { method: "PUT", headers: { "Content-Type": file.type || "image/jpeg" }, body: file });
-
-    const r = await Promise.all([
-      put(upload_urls.front, front),
-      put(upload_urls.back, back),
-      put(upload_urls.selfie, selfie),
+    append("Uploading to R2…");
+    await Promise.all([
+      put(pres.upload_urls.front, front),
+      put(pres.upload_urls.back, back),
+      put(pres.upload_urls.selfie, selfie),
     ]);
 
-    if (r.some(x => !x.ok)) {
-      const codes = await Promise.all(r.map(async x => `${x.status}`));
-      setLog("Upload error: " + codes.join(", "));
-      return;
-    }
-
-    // 3) create the verification job
-    const jobRes = await fetch(`${API}/v1/verifications`, {
+    // 3) create verification
+    append("Creating verification job…");
+    const created = await fetch(`${API}/v1/verifications`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
         document_type: "aadhaar_offline",
-        object_keys,
-        user_fields: {},
-      }),
-    });
-    const job = await jobRes.json();
+        object_keys: pres.object_keys,
+        user_fields: {}
+      })
+    }).then(r=>r.json());
+    setJob(created.id);
 
-    // 4) show debug list to prove files are in R2
-    const list = await fetch(`${API}/debug/list`).then(r => r.json());
-
-    setLog(
-      `Uploaded.\nJob: ${JSON.stringify(job)}\nR2 objects (${list.count}):\n${list.keys.join("\n")}`
-    );
+    // 4) poll
+    append(`Job ${created.id} queued. Polling…`);
+    let tries = 0;
+    while (tries < 120) {
+      const data = await fetch(`${API}/v1/verifications/${created.id}`).then(r=>r.json());
+      if (["approved","review","error"].includes(data.status)) {
+        setResult(data);
+        append(`Done: ${JSON.stringify(data)}`);
+        setBusy(false);
+        return;
+      }
+      await new Promise(res => setTimeout(res, 2000));
+      tries++;
+    }
+    append("Timed out.");
+    setBusy(false);
   }
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>KYC Frontend — Step 1</h1>
-      <button onClick={ping}>Ping /health</button>
-      <pre>{log}</pre>
+    <div style={{maxWidth:720,margin:"48px auto",fontFamily:"Inter,system-ui,Arial"}}>
+      <h1>KYC — Demo</h1>
 
-      <h2>Step 2 — Upload</h2>
-      <div>Front: <input type="file" accept="image/*" onChange={e => setFront(e.target.files?.[0] || null)} /></div>
-      <div>Back: <input type="file" accept="image/*" onChange={e => setBack(e.target.files?.[0] || null)} /></div>
-      <div>Selfie: <input type="file" accept="image/*" onChange={e => setSelfie(e.target.files?.[0] || null)} /></div>
-      <button onClick={upload} style={{ marginTop: 12 }}>Upload & Create Job</button>
+      <button onClick={ping} disabled={busy}>Ping /health</button>
+
+      <h2 style={{marginTop:24}}>Step 1 — Upload</h2>
+      <div style={{display:"grid",gap:8}}>
+        <label>Front: <input type="file" accept="image/*" onChange={e=>setFront(e.target.files[0])} /></label>
+        <label>Back: <input type="file" accept="image/*" onChange={e=>setBack(e.target.files[0])} /></label>
+        <label>Selfie: <input type="file" accept="image/*" onChange={e=>setSelfie(e.target.files[0])} /></label>
+      </div>
+      <button style={{marginTop:12}} disabled={busy || !front || !back || !selfie} onClick={run}>Upload & Verify</button>
+
+      <h2 style={{marginTop:24}}>Logs</h2>
+      <pre style={{background:"#0b1022",color:"#d4e1ff",padding:16,whiteSpace:"pre-wrap"}}>{log || "…"}</pre>
+
+      {result && (
+        <>
+          <h2>Result</h2>
+          <pre style={{background:"#f7f7f7",padding:16}}>{JSON.stringify(result, null, 2)}</pre>
+          {result.fields && (
+            <div style={{marginTop:8}}>
+              <strong>Extracted:</strong> {result.fields.full_name || "?"} | {result.fields.dob || "?"} | {result.fields.document_number || "?"}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
