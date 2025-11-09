@@ -1,59 +1,47 @@
 import os, uuid
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import boto3
 from botocore.config import Config
 import redis
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, Dict
 
 app = FastAPI(title="KYC Cloud API")
 
-# ------- CORS (allow your front-end origin) -------
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")  # set to https://your-frontend.up.railway.app in prod
+# Allow frontend to call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else ["*"],
+    allow_origins=["*"],  # For now allow all; tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ------- ENV -------
-S3_ENDPOINT = os.getenv("S3_ENDPOINT")              # e.g. Cloudflare R2: https://<accountid>.r2.cloudflarestorage.com
-S3_REGION   = os.getenv("S3_REGION", "auto")
+# ENV vars from Railway
+S3_ENDPOINT = os.getenv("S3_ENDPOINT")  # e.g. https://<accountid>.r2.cloudflarestorage.com
+S3_REGION = os.getenv("S3_REGION", "auto")
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
-S3_BUCKET     = os.getenv("S3_BUCKET", "kyc-raw")
-REDIS_URL     = os.getenv("REDIS_URL")
+S3_BUCKET = os.getenv("S3_BUCKET", "kyc-raw")
+REDIS_URL = os.getenv("REDIS_URL")
 
-# ------- Clients -------
+# Redis
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
-if S3_ENDPOINT:
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT,
-        aws_access_key_id=S3_ACCESS_KEY,
-        aws_secret_access_key=S3_SECRET_KEY,
-        region_name=S3_REGION if S3_REGION != "auto" else None,
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-    )
-else:
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=S3_ACCESS_KEY,
-        aws_secret_access_key=S3_SECRET_KEY,
-        region_name=os.getenv("S3_REGION", "ap-south-1"),
-        config=Config(signature_version="s3v4"),
-    )
+# R2 client
+s3 = boto3.client(
+    "s3",
+    endpoint_url=S3_ENDPOINT,
+    aws_access_key_id=S3_ACCESS_KEY,
+    aws_secret_access_key=S3_SECRET_KEY,
+    region_name=None,
+    config=Config(signature_version="s3v4"),
+)
 
-# ------- Models -------
+# ======== MODELS ========
 class PresignReq(BaseModel):
-    document_type: str
+    document_type: str = Field(..., examples=["passport", "driver_license", "aadhaar_offline"])
     user_fields: dict = Field(default_factory=dict)
-    # NEW: ask frontend to tell us the MIME type for each part
-    content_types: Optional[Dict[str, str]] = None  # {"front":"image/png","back":"image/jpeg","selfie":"image/jpeg"}
 
 class PresignResp(BaseModel):
     object_keys: dict
@@ -64,70 +52,33 @@ class CreateVerReq(BaseModel):
     object_keys: dict
     user_fields: dict = Field(default_factory=dict)
 
-# ------- Helpers -------
-def choose_ext_and_type(filename_or_mime: str):
-    """
-    Accept JPEG/PNG/WEBP from the frontend and return (ext, mime).
-    filename_or_mime can be the file MIME (image/png) or a name like foo.png
-    """
-    s = filename_or_mime.lower()
-    if "png" in s:
-        return (".png", "image/png")
-    if "webp" in s:
-        return (".webp", "image/webp")
-    # default jpeg
-    return (".jpg", "image/jpeg")
-
-# ------- Endpoints -------
+# ======== ROUTES ========
 @app.get("/health")
 def health():
     return {"ok": True}
 
+
 @app.post("/v1/presign", response_model=PresignResp)
 def presign(req: PresignReq):
-    uid = str(uuid.uuid4())
-    keys = {
-        "front": f"raw/{uid}-front",
-        "back": f"raw/{uid}-back",
-        "selfie": f"raw/{uid}-selfie",
-    }
-    content_types = {"front": fmime, "back": bmime, "selfie": smime}
-
-    urls = {}
-    for part, key in keys.items():
-        # choose extension from MIME if provided (defaults to .jpg)
-        mime = (req.content_types or {}).get(part, "image/jpeg")
-        ext = {
-            "image/jpeg": "jpg",
-            "image/jpg": "jpg",
-            "image/png": "png",
-            "image/webp": "webp",
-        }.get(mime, "jpg")
-        full_key = f"{key}.{ext}"
-
-        params = {
-            "Bucket": S3_BUCKET,
-            "Key": full_key,
-            # IMPORTANT: include the same ContentType the browser will send
-            "ContentType": mime,
+    try:
+        uid = str(uuid.uuid4())
+        keys = {
+            "front": f"raw/{uid}-front.jpg",
+            "back": f"raw/{uid}-back.jpg",
+            "selfie": f"raw/{uid}-selfie.jpg",
         }
-        url = s3.generate_presigned_url(
-            ClientMethod="put_object",
-            Params=params,
-            ExpiresIn=600,
-        )
 
-        keys[part] = full_key
-        urls[part] = url
+        urls = {}
+        for part, key in keys.items():
+            urls[part] = s3.generate_presigned_url(
+                ClientMethod="put_object",
+                Params={"Bucket": S3_BUCKET, "Key": key, "ContentType": "image/jpeg"},
+                ExpiresIn=600,
+            )
 
-    return {"object_keys": keys, "upload_urls": urls}
-
-
-@app.get("/debug/list")
-def debug_list():
-    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix="raw/")
-    names = [o["Key"] for o in resp.get("Contents", [])]
-    return {"count": len(names), "keys": names}
+        return {"object_keys": keys, "upload_urls": urls}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/v1/verifications")
@@ -147,6 +98,7 @@ def create_verification(req: CreateVerReq):
     r.rpush("jobs", job_id)
     return {"id": job_id, "status": "pending"}
 
+
 @app.get("/v1/verifications/{job_id}")
 def get_verification(job_id: str):
     data = r.hgetall(f"ver:{job_id}")
@@ -157,7 +109,11 @@ def get_verification(job_id: str):
         "status": data.get("status", "unknown"),
         "score": int(data["score"]) if data.get("score", "").isdigit() else None,
         "explanations": [
-            {"check": "dummy_pipeline", "pass": data.get("status") == "approved", "detail": "Simulated check"},
+            {
+                "check": "dummy_pipeline",
+                "pass": data.get("status") == "approved",
+                "detail": "Simulated check",
+            },
         ],
         "fields": {"name": "TBD", "dob": "TBD"},
         "report_pdf_url": None,
