@@ -1,129 +1,134 @@
-import os, uuid
-from fastapi import FastAPI, HTTPException
+import os
+import uuid
+from typing import Optional
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import boto3
 from botocore.config import Config
 import redis
 
 app = FastAPI(title="KYC Cloud API")
 
-# --- CORS ---
+# ---- CORS ----
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "").strip()
-allowed = [FRONTEND_ORIGIN] if FRONTEND_ORIGIN else ["*"]   # fallback for quick testing
-# You can also hard-list multiple:
-# allowed = [FRONTEND_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"]
-
+allow = [FRONTEND_ORIGIN] if FRONTEND_ORIGIN else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed,
-    allow_credentials=True,
-    allow_methods=["*"],     # OPTIONS handled automatically
+    allow_origins=allow,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ENV vars from Railway
-S3_ENDPOINT = os.getenv("S3_ENDPOINT")  # e.g. https://<accountid>.r2.cloudflarestorage.com
-S3_REGION = os.getenv("S3_REGION", "auto")
-S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
-S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
-S3_BUCKET = os.getenv("S3_BUCKET", "kyc-raw")
+# ---- Redis ----
 REDIS_URL = os.getenv("REDIS_URL")
-
-# Redis
+if not REDIS_URL:
+    raise RuntimeError("REDIS_URL is required")
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
-# R2 client
-s3 = boto3.client(
-    "s3",
-    endpoint_url=S3_ENDPOINT,
-    aws_access_key_id=S3_ACCESS_KEY,
-    aws_secret_access_key=S3_SECRET_KEY,
-    region_name=None,
-    config=Config(signature_version="s3v4"),
-)
+# ---- S3 / R2 (optional but recommended) ----
+S3_ENDPOINT = os.getenv("S3_ENDPOINT") or None
+S3_REGION   = os.getenv("S3_REGION", "auto")
+S3_ACCESS   = os.getenv("S3_ACCESS_KEY")
+S3_SECRET   = os.getenv("S3_SECRET_KEY")
+S3_BUCKET   = os.getenv("S3_BUCKET")
 
-# ======== MODELS ========
-class PresignReq(BaseModel):
-    document_type: str = Field(..., examples=["passport", "driver_license", "aadhaar_offline"])
-    user_fields: dict = Field(default_factory=dict)
+s3_client = None
+if S3_ACCESS and S3_SECRET and S3_BUCKET:
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=S3_ENDPOINT or None,
+        region_name=S3_REGION if S3_ENDPOINT else None,
+        aws_access_key_id=S3_ACCESS,
+        aws_secret_access_key=S3_SECRET,
+        config=Config(s3={"addressing_style": "virtual"} if S3_ENDPOINT else None),
+    )
 
-class PresignResp(BaseModel):
-    object_keys: dict
-    upload_urls: dict
+def s3_put_bytes(key: str, data: bytes, content_type: str):
+    if not s3_client:
+        return None
+    s3_client.put_object(Bucket=S3_BUCKET, Key=key, Body=data, ContentType=content_type)
+    # Public URL (for R2 use the custom/public domain if configured; otherwise return key)
+    return key
 
-class CreateVerReq(BaseModel):
-    document_type: str
-    object_keys: dict
-    user_fields: dict = Field(default_factory=dict)
-
-# ======== ROUTES ========
 @app.get("/health")
 def health():
-    return {"ok": True}
-
-
-@app.post("/v1/presign", response_model=PresignResp)
-def presign(req: PresignReq):
     try:
-        uid = str(uuid.uuid4())
-        keys = {
-            "front": f"raw/{uid}-front.jpg",
-            "back": f"raw/{uid}-back.jpg",
-            "selfie": f"raw/{uid}-selfie.jpg",
-        }
+        r.ping()
+        ok = True
+    except Exception:
+        ok = False
+    return {"status": "ok", "redis": ok}
 
-        urls = {}
-        for part, key in keys.items():
-            urls[part] = s3.generate_presigned_url(
-                ClientMethod="put_object",
-                Params={"Bucket": S3_BUCKET, "Key": key, "ContentType": "image/jpeg"},
-                ExpiresIn=600,
-            )
+@app.post("/jobs/start")
+async def start_job(
+    front: UploadFile = File(...),
+    back: UploadFile  = File(...),
+    selfie: UploadFile = File(...),
+):
+    jid = str(uuid.uuid4())[:8]
 
-        return {"object_keys": keys, "upload_urls": urls}
+    # upload to S3/R2 if configured
+    front_key = back_key = selfie_key = None
+    try:
+        front_key  = f"uploads/{jid}/front_{front.filename}"
+        front_bytes = await front.read()
+        if s3_client:
+            s3_put_bytes(front_key, front_bytes, front.content_type or "application/octet-stream")
+
+        back_key   = f"uploads/{jid}/back_{back.filename}"
+        back_bytes = await back.read()
+        if s3_client:
+            s3_put_bytes(back_key, back_bytes, back.content_type or "application/octet-stream")
+
+        selfie_key = f"uploads/{jid}/selfie_{selfie.filename}"
+        selfie_bytes = await selfie.read()
+        if s3_client:
+            s3_put_bytes(selfie_key, selfie_bytes, selfie.content_type or "application/octet-stream")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, f"Storage error: {e}")
 
+    # init job record
+    r.hset(f"ver:{jid}", mapping={
+        "status": "queued",
+        "score": "",
+        "fields": "",
+        "front_key": front_key or "",
+        "back_key": back_key or "",
+        "selfie_key": selfie_key or "",
+    })
+    r.rpush("jobs", jid)
+    return {"id": jid, "status": "queued"}
 
-@app.post("/v1/verifications")
-def create_verification(req: CreateVerReq):
-    job_id = "ver_" + str(uuid.uuid4())
-    r.hset(
-        f"ver:{job_id}",
-        mapping={
-            "status": "pending",
-            "score": "",
-            "document_type": req.document_type,
-            "front": req.object_keys.get("front", ""),
-            "back": req.object_keys.get("back", ""),
-            "selfie": req.object_keys.get("selfie", ""),
-        },
-    )
-    r.rpush("jobs", job_id)
-    return {"id": job_id, "status": "pending"}
+class JobResp(BaseModel):
+    id: str
+    status: str
+    score: Optional[int] = None
+    fields: Optional[dict] = None
+    report_pdf_url: Optional[str] = None
 
-
-@app.get("/v1/verifications/{job_id}")
-def get_verification(job_id: str):
+@app.get("/jobs/{job_id}", response_model=JobResp)
+def get_job(job_id: str):
     data = r.hgetall(f"ver:{job_id}")
     if not data:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(404, "unknown job")
+
     fields = None
-    if "fields" in data:
+    if data.get("fields"):
         try:
+            import json
             fields = json.loads(data["fields"])
         except Exception:
             fields = None
-    out = {
+
+    score = None
+    if data.get("score") and data["score"].isdigit():
+        score = int(data["score"])
+
+    return {
         "id": job_id,
-        "status": data.get("status","unknown"),
-        "score": int(data["score"]) if data.get("score","").isdigit() else None,
-        "explanations": [
-            {"check": "selfie_face_present", "pass": data.get("status")=="approved" or data.get("status")=="review"},
-            {"check": "id_front_parsed", "pass": fields is not None},
-        ],
+        "status": data.get("status", "unknown"),
+        "score": score,
         "fields": fields,
         "report_pdf_url": None
     }
-    return out
