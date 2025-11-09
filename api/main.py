@@ -123,6 +123,13 @@ def presign(req: PresignReq):
     return {"object_keys": keys, "upload_urls": urls}
 
 
+@app.get("/debug/list")
+def debug_list():
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix="raw/")
+    names = [o["Key"] for o in resp.get("Contents", [])]
+    return {"count": len(names), "keys": names}
+
+
 @app.post("/v1/verifications")
 def create_verification(req: CreateVerReq):
     job_id = "ver_" + str(uuid.uuid4())
