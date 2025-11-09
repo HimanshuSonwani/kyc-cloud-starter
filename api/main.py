@@ -77,7 +77,7 @@ def presign(req: PresignReq):
     for part, key in keys.items():
         url = s3.generate_presigned_url(
             ClientMethod="put_object",
-            Params={"Bucket": S3_BUCKET, "Key": key, "ContentType":"image/jpeg"},
+            Params={"Bucket": S3_BUCKET, "Key": key},
             ExpiresIn=600,
         )
         urls[part] = url
