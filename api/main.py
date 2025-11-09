@@ -6,14 +6,13 @@ from pydantic import BaseModel, Field
 import boto3
 from botocore.config import Config
 import redis
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="KYC Cloud API")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")
 
-# allow your frontend origin(s)
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=https://kyc-cloud-starter-production-7c48.up.railway.app,  # e.g. "https://your-frontend.up.railway.app"
+    allow_origins=[FRONTEND_ORIGIN],  # must be a list of strings
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
